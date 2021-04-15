@@ -21,6 +21,8 @@ import android.view.Gravity;
 import android.view.View;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.annotation.UiThread;
 import androidx.lifecycle.DefaultLifecycleObserver;
 import androidx.lifecycle.Lifecycle;
 import androidx.lifecycle.LifecycleOwner;
@@ -136,6 +138,8 @@ final class MapboxMapController
   private Style style;
   private List<String> annotationOrder;
   private List<String> annotationConsumeTapEvents;
+  private ArrayDeque<Pair<String, Object>> methodQueue = new ArrayDeque();
+  private boolean channelReady = false;
 
   MapboxMapController(
     int id,
@@ -328,7 +332,7 @@ final class MapboxMapController
       mapboxMap.addOnMapLongClickListener(MapboxMapController.this);
 	    localizationPlugin = new LocalizationPlugin(mapView, mapboxMap, style);
 
-      methodChannel.invokeMethod("map#onStyleLoaded", null);
+      invokeMethod("map#onStyleLoaded", null);
     }
   };
 
@@ -372,7 +376,7 @@ final class MapboxMapController
 
     final Map<String, Object> arguments = new HashMap<>(1);
     arguments.put("userLocation", userLocation);
-    methodChannel.invokeMethod("map#onUserLocationUpdated", arguments);
+    invokeMethod("map#onUserLocationUpdated", arguments);
   }
 
   private void enableSymbolManager(@NonNull Style style) {
@@ -407,11 +411,31 @@ final class MapboxMapController
     }
   }
 
+  @UiThread
+  private void invokeMethod(@NonNull String method, @Nullable Object arguments) {
+    if (channelReady) {
+      methodChannel.invokeMethod(method, arguments);
+    }
+    else {
+      methodQueue.push(Pair.create(method, arguments));
+    }
+  }
+
   @Override
   public void onMethodCall(MethodCall call, MethodChannel.Result result) {
     switch (call.method) {
       case "map#waitForMap":
         if (mapboxMap != null) {
+          new Handler(Looper.getMainLooper()).post(new Runnable() {
+            @Override
+            public void run() {
+              for (Pair<String, Object> item : methodQueue) {
+                methodChannel.invokeMethod(item.first, item.second);
+              }
+              methodQueue.clear();
+              channelReady = true;
+            }
+          });
           result.success(null);
           return;
         }
@@ -992,7 +1016,7 @@ final class MapboxMapController
     final Map<String, Object> arguments = new HashMap<>(2);
     boolean isGesture = reason == MapboxMap.OnCameraMoveStartedListener.REASON_API_GESTURE;
     arguments.put("isGesture", isGesture);
-    methodChannel.invokeMethod("camera#onMoveStarted", arguments);
+    invokeMethod("camera#onMoveStarted", arguments);
   }
 
   @Override
@@ -1002,7 +1026,7 @@ final class MapboxMapController
     }
     final Map<String, Object> arguments = new HashMap<>(2);
     arguments.put("position", Convert.toJson(mapboxMap.getCameraPosition()));
-    methodChannel.invokeMethod("camera#onMove", arguments);
+    invokeMethod("camera#onMove", arguments);
   }
 
   @Override
@@ -1011,20 +1035,20 @@ final class MapboxMapController
     if (trackCameraPosition) {
       arguments.put("position", Convert.toJson(mapboxMap.getCameraPosition()));
     }
-    methodChannel.invokeMethod("camera#onIdle", arguments);
+    invokeMethod("camera#onIdle", arguments);
   }
 
   @Override
   public void onCameraTrackingChanged(int currentMode) {
     final Map<String, Object> arguments = new HashMap<>(2);
     arguments.put("mode", currentMode);
-    methodChannel.invokeMethod("map#onCameraTrackingChanged", arguments);
+    invokeMethod("map#onCameraTrackingChanged", arguments);
   }
 
   @Override
   public void onCameraTrackingDismissed() {
     this.myLocationTrackingMode = 0;
-    methodChannel.invokeMethod("map#onCameraTrackingDismissed", new HashMap<>());
+    invokeMethod("map#onCameraTrackingDismissed", new HashMap<>());
   }
 
   @Override
@@ -1062,28 +1086,28 @@ final class MapboxMapController
   public void onSymbolTapped(Symbol symbol) {
     final Map<String, Object> arguments = new HashMap<>(2);
     arguments.put("symbol", String.valueOf(symbol.getId()));
-    methodChannel.invokeMethod("symbol#onTap", arguments);
+    invokeMethod("symbol#onTap", arguments);
   }
 
   @Override
   public void onLineTapped(Line line) {
     final Map<String, Object> arguments = new HashMap<>(2);
     arguments.put("line", String.valueOf(line.getId()));
-    methodChannel.invokeMethod("line#onTap", arguments);
+    invokeMethod("line#onTap", arguments);
   }
 
   @Override
   public void onCircleTapped(Circle circle) {
     final Map<String, Object> arguments = new HashMap<>(2);
     arguments.put("circle", String.valueOf(circle.getId()));
-    methodChannel.invokeMethod("circle#onTap", arguments);
+    invokeMethod("circle#onTap", arguments);
   }
 
   @Override
   public void onFillTapped(Fill fill) {
     final Map<String, Object> arguments = new HashMap<>(2);
     arguments.put("fill", String.valueOf(fill.getId()));
-    methodChannel.invokeMethod("fill#onTap", arguments);
+    invokeMethod("fill#onTap", arguments);
   }
 
   @Override
@@ -1094,7 +1118,7 @@ final class MapboxMapController
     arguments.put("y", pointf.y);
     arguments.put("lng", point.getLongitude());
     arguments.put("lat", point.getLatitude());
-    methodChannel.invokeMethod("map#onMapClick", arguments);
+    invokeMethod("map#onMapClick", arguments);
     return true;
   }
 
@@ -1106,7 +1130,7 @@ final class MapboxMapController
     arguments.put("y", pointf.y);
     arguments.put("lng", point.getLongitude());
     arguments.put("lat", point.getLatitude());
-    methodChannel.invokeMethod("map#onMapLongClick", arguments);
+    invokeMethod("map#onMapLongClick", arguments);
     return true;
   }
 
